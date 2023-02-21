@@ -2,9 +2,9 @@
 
 WITH CTE1 AS (
 select fc_type, warehouse_id, 
-shift,(date_trunc('week', '2022-02-14'::date)-interval '1 day')::date as week_start_dt,
+shift,(date_trunc('week', metric_date)-interval '1 day')::date as week_start_dt,
 date_part(dow,metric_date)+1 as day_num,
-to_char('2023-02-16'::DATE, 'Day') as day_name,
+to_char(metric_date, 'Day') as day_name,
  
        avg(capped_days_of_backlog) as tcap,avg(uncapped_days_of_backlog) as ucap
 FROM   ppt_sandbox.tcap_hours_backlog 
