@@ -109,4 +109,4 @@ WHEN  fc_type = 'Nonsortable' then
 case when minimum_total_bl >.45 then .45 when maximum_total_bl>.40 then .40  end 
 end as new_column
 
-from CTE6
+from CTE6 ;
