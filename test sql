@@ -1,0 +1,112 @@
+
+
+WITH CTE1 AS (
+select fc_type, warehouse_id, 
+shift,(date_trunc('week', metric_date)-interval '1 day')::date as week_start_dt,
+date_part(dow,metric_date)+1 as day_num,
+to_char(metric_date, 'Day') as day_name,
+ 
+       avg(capped_days_of_backlog) as tcap,avg(uncapped_days_of_backlog) as ucap
+FROM   ppt_sandbox.tcap_hours_backlog 
+ where metric_date  BETWEEN 
+ (DATE_TRUNC('week', DATEADD(day, -14, GETDATE())) - INTERVAL '1 days') 
+ AND  
+ (DATE_TRUNC('week', DATEADD(day, -1, GETDATE())) - INTERVAL '2 day' )
+GROUP BY 1,2,3,4,5,6  limit 1000
+
+),
+CTE2 AS ( 
+SELECT fc_type,warehouse_id,shift,week_start_dt, day_num, day_name,tcap, ucap
+FROM CTE1
+),
+CTE3 as ( 
+SELECT fc_type,shift,warehouse_id,week_start_dt, day_num, day_name,tcap, ucap, (avg(tcap) over (partition by warehouse_id,shift,day_num)) as avg_tcap
+  FROM CTE2
+ ORDER BY 1 asc, 2 asc, 3 asc, 4 asc, 5 asc
+ )
+ ,
+ CTE4 as ( 
+SELECT fc_type,warehouse_id,week_start_dt, day_num,day_name,shift, avg_tcap,
+max(CASE WHEN shift='Day' then tcap else -100.00 END) as tcap_day,
+max(CASE WHEN shift='Night' then tcap else -100.00 END) as tcap_night,
+max(CASE WHEN shift='Day' then ucap else -100.00 END) as ucap_day,
+max(CASE WHEN shift='Night' then ucap else -100.00 END) as ucap_night,
+max(CASE WHEN shift='Day' then avg_tcap else -100.00 END) as avg_tcap_day,
+max(CASE WHEN shift='Night' then avg_tcap else -100.00 END) as avg_tcap_night 
+  FROM CTE3 GROUP BY 1,2,3,4,5,6, 7
+  ),
+  CTE5 as (
+  SELECT fc_type,warehouse_id,week_start_dt, day_num,day_name,
+  tcap_day, 
+  tcap_night,  
+   ucap_day, 
+  ucap_night,  
+  (tcap_night+tcap_day)/2 as tcap_day_night,
+  (ucap_night+ucap_day)/2 as ucap_day_night,
+  avg_tcap_day, 
+  avg_tcap_night, 
+  (avg_tcap_day+avg_tcap_night)/2 as avg_tcap_day_night,
+CASE WHEN (ucap_night+ucap_day)/2 <= 0.25 THEN 1
+ELSE 0
+END threshold_flag, 
+CASE WHEN (ucap_day)/2 <= 0.25 THEN 1 ELSE 0 END threshold_flag_ucap_day,
+CASE WHEN (ucap_night)/2 <= 0.25 THEN 1 ELSE 0 END threshold_flag_ucap_night,
+CASE WHEN (ucap_night+ucap_day)/2 <= 0.25 THEN 1 ELSE 0 END threshold_flag_ucap_day_night
+  FROM CTE4) ,
+CTE6 AS (
+SELECT fc_type,warehouse_id,week_start_dt, day_num,day_name,
+  tcap_day, 
+  tcap_night, 
+  tcap_day_night,
+  ucap_day, 
+  ucap_night, 
+ ucap_day_night,
+  avg_tcap_day, 
+  avg_tcap_night, 
+ avg_tcap_day_night,
+threshold_flag_ucap_day,
+threshold_flag_ucap_night,
+threshold_flag_ucap_day_night,
+CASE 
+WHEN  fc_type = 'ARSortable'  then
+	CASE WHEN threshold_flag_ucap_day=1 then  0.22+avg_tcap_day/100 
+			  WHEN  threshold_flag_ucap_night=1 then 0.22+avg_tcap_night/100
+			  ELSE 0.22 END
+WHEN  fc_type = 'Nonsortable' then
+	CASE  WHEN threshold_flag_ucap_day_night=1 then 0.4 + avg_tcap_day_night/100
+			   ELSE 0.40 END
+WHEN  fc_type='Canada'   then
+		CASE WHEN threshold_flag_ucap_day_night =1 then 0.35+ avg_tcap_day_night/100 
+         ELSE 0.40 END
+WHEN  fc_type='TSSL' THEN  0.17
+ELSE 0.17
+END as maximum_total_bl,
+CASE
+WHEN  fc_type = 'ARSortable' then
+	CASE WHEN threshold_flag_ucap_day=1 then  0.22+avg_tcap_day/100 - 0.02
+			  WHEN  threshold_flag_ucap_night=1 then 0.22+avg_tcap_night/100 - 0.02
+			  ELSE 0.20  end  
+WHEN  fc_type = 'Nonsortable' then
+	CASE  WHEN threshold_flag_ucap_day_night=1 then 0.4 + avg_tcap_day_night*0.1 
+			   ELSE 0.30 END
+WHEN  fc_type='Canada'  then
+		CASE WHEN threshold_flag_ucap_day_night =1 then 0.35+ avg_tcap_day_night/100 - 0.1
+         ELSE 0.30 END
+WHEN  fc_type='TSSL' THEN  0.15
+ELSE 0.17
+END as minimum_total_bl
+
+
+FROM CTE5 ) 
+
+select *,
+CASE
+WHEN  fc_type = 'ARSortable' then
+case when minimum_total_bl >.38 then .38 when maximum_total_bl>.40 then .40 end 
+WHEN  fc_type = 'Canada' then
+case when minimum_total_bl >.30 then .30 when maximum_total_bl>.40 then .40 end 
+WHEN  fc_type = 'Nonsortable' then
+case when minimum_total_bl >.45 then .45 when maximum_total_bl>.40 then .40  end 
+end as new_column
+
+from CTE6 ;
